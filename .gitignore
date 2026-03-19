@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# Database & data
+demo.db
+data/
+
+# Uploaded documents
+static/documents/*
+!static/documents/.gitkeep
+
+# Search index
+bm25_index.pkl
+
+# Environment
+.env
+
+# Qdrant data
+qdrant_data/
+
+# IDE & tooling
+.vscode/
+.idea/
+.claude/
+planning/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (large files)
+models/

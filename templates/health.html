@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+
+{% block head %}
+<style>
+    .log-filters { display: flex; gap: 0.4rem; margin-bottom: 0.8rem; }
+    .log-filter-btn {
+        padding: 0.3rem 0.7rem; border-radius: 4px; border: 1px solid #ddd;
+        background: white; cursor: pointer; font-size: 0.8rem; font-weight: 500;
+        transition: all 0.15s;
+    }
+    .log-filter-btn:hover { background: #f5f7fa; }
+    .log-filter-btn.active { background: #1a237e; color: white; border-color: #1a237e; }
+    .log-table-wrap {
+        max-height: 400px; min-height: 200px; overflow-y: auto;
+        border: 1px solid #eee; border-radius: 6px;
+    }
+    .log-table-wrap::-webkit-scrollbar { width: 6px; }
+    .log-table-wrap::-webkit-scrollbar-thumb { background: #c5cae9; border-radius: 3px; }
+    .log-table { width: 100%; border-collapse: collapse; }
+    .log-table thead { position: sticky; top: 0; z-index: 1; }
+    .log-table th {
+        background: #f5f7fa; font-weight: 600; color: #555;
+        text-align: left; padding: 0.5rem 0.7rem; font-size: 0.85rem;
+        border-bottom: 2px solid #e8eaf6;
+    }
+    .log-table td {
+        padding: 0.45rem 0.7rem; border-bottom: 1px solid #f0f0f0;
+        font-size: 0.83rem; color: #333;
+    }
+    .log-table tr:hover { background: #fafafe; }
+    .log-table .col-ts { white-space: nowrap; color: #888; width: 160px; }
+    .log-table .col-level { width: 80px; text-align: center; }
+    .log-table .col-msg { word-break: break-word; }
+    .log-level-badge {
+        display: inline-block; padding: 0.15rem 0.5rem; border-radius: 12px;
+        font-size: 0.75rem; font-weight: 600;
+    }
+    .log-level-INFO { background: #e3f2fd; color: #1565c0; }
+    .log-level-WARNING { background: #fff3e0; color: #e65100; }
+    .log-level-ERROR { background: #ffebee; color: #c62828; }
+    .log-empty { color: #999; text-align: center; padding: 2rem; font-size: 0.9rem; }
+    .log-count { font-size: 0.8rem; color: #888; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="display:grid; grid-template-columns:2fr 1fr; gap:1.5rem; align-items:start;">
+    <!-- Left column: 시스템 상태 -->
+    <div>
+        <div class="card" style="height:100%;">
+            <h2 style="display:flex; justify-content:space-between; align-items:center;">
+                시스템 상태
+                <span id="liveClock" style="font-size:0.8rem; color:#999; font-weight:400;"></span>
+            </h2>
+            <div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:1.5rem;">
+                <span id="statusDot" style="display:inline-block; width:14px; height:14px; border-radius:50%; background:{{ '#2e7d32' if health.status == 'ok' else '#c62828' }};"></span>
+                <span id="statusText" style="font-size:1.1rem; font-weight:600; color:{{ '#2e7d32' if health.status == 'ok' else '#c62828' }};">
+                    {{ '정상 운영 중' if health.status == 'ok' else '오류 발생' }}
+                </span>
+            </div>
+
+            <h3 style="font-size:0.95rem; color:#555; margin-bottom:0.8rem;">서비스 연결</h3>
+            <table>
+                <thead>
+                    <tr><th>서비스</th><th>상태</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>데이터베이스 (SQLite)</td>
+                        <td id="svc-db"></td>
+                    </tr>
+                    <tr>
+                        <td>벡터 DB (Qdrant)</td>
+                        <td id="svc-qdrant"></td>
+                    </tr>
+                    <tr>
+                        <td>LLM 서버</td>
+                        <td id="svc-llm"></td>
+                    </tr>
+                    <tr>
+                        <td>임베딩 모델</td>
+                        <td id="svc-embedding"></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Right column: 데이터 현황 -->
+    <div>
+        <div class="card">
+            <h2>데이터 현황</h2>
+            <div style="display:grid; grid-template-columns:1fr; gap:1rem;">
+                <div style="text-align:center; padding:1rem; background:#f5f7fa; border-radius:8px;">
+                    <div id="stat-documents" style="font-size:1.5rem; font-weight:700; color:#1a237e;">-</div>
+                    <div style="font-size:0.7rem; color:#666;">문서</div>
+                </div>
+                <div style="text-align:center; padding:1rem; background:#f5f7fa; border-radius:8px;">
+                    <div id="stat-chunks" style="font-size:1.5rem; font-weight:700; color:#1a237e;">-</div>
+                    <div style="font-size:0.7rem; color:#666;">청크</div>
+                </div>
+                <div style="text-align:center; padding:1rem; background:#f5f7fa; border-radius:8px;">
+                    <div id="stat-bm25" style="font-size:1.5rem; font-weight:700; color:#1a237e;">-</div>
+                    <div style="font-size:0.7rem; color:#666;">BM25 인덱스</div>
+                </div>
+            </div>
+            <div style="margin-top:1rem; font-size:0.85rem; color:#888;">
+                인덱싱 상태: <span id="stat-indexing"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Logs panel (full width) -->
+<div class="card">
+    <h2 style="display:flex; justify-content:space-between; align-items:center;">
+        시스템 로그
+        <span id="logCount" class="log-count"></span>
+    </h2>
+    <div class="log-filters">
+        <button class="log-filter-btn active" onclick="setLogFilter(this, '')">전체</button>
+        <button class="log-filter-btn" onclick="setLogFilter(this, 'INFO')">INFO</button>
+        <button class="log-filter-btn" onclick="setLogFilter(this, 'WARNING')">WARNING</button>
+        <button class="log-filter-btn" onclick="setLogFilter(this, 'ERROR')">ERROR</button>
+    </div>
+    <div class="log-table-wrap" id="logTableWrap">
+        <table class="log-table">
+            <thead>
+                <tr><th>시간</th><th>레벨</th><th>내용</th></tr>
+            </thead>
+            <tbody id="logBody">
+                <tr><td colspan="3" class="log-empty">로그를 불러오는 중...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function badge(ok, yesLabel, noLabel) {
+    if (ok) return `<span class="status-badge status-indexed">${yesLabel}</span>`;
+    return `<span class="status-badge status-error">${noLabel}</span>`;
+}
+
+function updateClock() {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    const h = String(now.getHours()).padStart(2, '0');
+    const mi = String(now.getMinutes()).padStart(2, '0');
+    const s = String(now.getSeconds()).padStart(2, '0');
+    document.getElementById('liveClock').textContent = `${y}-${m}-${d} ${h}:${mi}:${s}`;
+}
+
+async function refreshHealth() {
+    try {
+        const res = await fetch('/health?format=json');
+        const h = await res.json();
+
+        const ok = h.status === 'ok';
+        const color = ok ? '#2e7d32' : '#c62828';
+        document.getElementById('statusDot').style.background = color;
+        const statusText = document.getElementById('statusText');
+        statusText.textContent = ok ? '정상 운영 중' : '오류 발생';
+        statusText.style.color = color;
+
+        document.getElementById('svc-db').innerHTML = badge(h.database === 'connected', '연결됨', '미연결');
+        document.getElementById('svc-qdrant').innerHTML = badge(h.services.qdrant === 'connected', '연결됨', '미연결');
+        document.getElementById('svc-llm').innerHTML = badge(h.services.llm === 'connected', '연결됨', '미연결');
+        document.getElementById('svc-embedding').innerHTML = badge(h.embedding_model === 'loaded', '로딩됨', '로딩 중');
+
+        document.getElementById('stat-documents').textContent = h.documents;
+        document.getElementById('stat-chunks').textContent = h.chunks;
+        document.getElementById('stat-bm25').textContent = h.bm25_docs;
+        document.getElementById('stat-indexing').innerHTML = h.indexing
+            ? '<span class="status-badge status-uploaded">진행 중</span>'
+            : '<span class="status-badge status-indexed">대기</span>';
+    } catch (e) {
+        document.getElementById('statusDot').style.background = '#c62828';
+        document.getElementById('statusText').textContent = '연결 오류';
+        document.getElementById('statusText').style.color = '#c62828';
+    }
+}
+
+// --- Log viewer ---
+let currentLogFilter = '';
+
+function setLogFilter(btn, level) {
+    currentLogFilter = level;
+    document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    refreshLogs();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function refreshLogs() {
+    try {
+        const url = currentLogFilter ? `/logs?level=${currentLogFilter}` : '/logs';
+        const res = await fetch(url);
+        const data = await res.json();
+        const wrap = document.getElementById('logTableWrap');
+        const body = document.getElementById('logBody');
+
+        const wasAtBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 30;
+
+        if (data.logs.length === 0) {
+            body.innerHTML = '<tr><td colspan="3" class="log-empty">로그가 없습니다.</td></tr>';
+            document.getElementById('logCount').textContent = '';
+            return;
+        }
+
+        document.getElementById('logCount').textContent = `${data.total}건`;
+
+        body.innerHTML = data.logs.map(entry => `
+            <tr>
+                <td class="col-ts">${entry.timestamp}</td>
+                <td class="col-level"><span class="log-level-badge log-level-${entry.level}">${entry.level}</span></td>
+                <td class="col-msg">${escapeHtml(entry.message)}</td>
+            </tr>
+        `).join('');
+
+        if (wasAtBottom) {
+            wrap.scrollTop = wrap.scrollHeight;
+        }
+    } catch (e) {
+        document.getElementById('logBody').innerHTML = '<tr><td colspan="3" class="log-empty">로그 로딩 실패</td></tr>';
+    }
+}
+
+updateClock();
+refreshHealth();
+refreshLogs();
+setInterval(updateClock, 1000);
+setInterval(refreshHealth, 5000);
+setInterval(refreshLogs, 3000);
+</script>
+{% endblock %}

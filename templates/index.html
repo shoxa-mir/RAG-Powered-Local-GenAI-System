@@ -1,0 +1,550 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="grid-2">
+    <!-- Left column: Upload & Documents -->
+    <div>
+        <!-- Upload Card -->
+        <div class="card">
+            <h2>문서 업로드</h2>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <div style="margin-bottom: 1rem;">
+                    <input type="file" id="fileInput" name="file" accept=".pdf,.docx" />
+                    <small style="color: #888; display: block; margin-top: 0.3rem;">PDF, DOCX 파일 지원</small>
+                </div>
+                <button type="submit" class="btn btn-primary">업로드</button>
+                <button type="button" class="btn btn-success" onclick="startIndexing(false)" style="margin-left: 0.5rem;">인덱싱 시작</button>
+                <button type="button" class="btn btn-secondary" onclick="startIndexing(true)" style="margin-left: 0.5rem;" title="모든 문서를 다시 인덱싱합니다">전체 재인덱싱</button>
+            </form>
+            <div id="uploadMessage" style="margin-top: 0.8rem;"></div>
+        </div>
+
+        <!-- Indexing Status Card -->
+        <div class="card" id="indexingCard" style="display: none;">
+            <h2>인덱싱 진행 상태</h2>
+            <div class="progress-bar" style="margin-bottom: 0.5rem;">
+                <div class="progress-bar-fill" id="progressBar" style="width: 0%;"></div>
+            </div>
+            <p id="indexingMessage" style="font-size: 0.85rem; color: #666;"></p>
+        </div>
+
+        <!-- Documents List Card -->
+        <div class="card">
+            <h2>업로드된 문서 ({{ documents | length }}개)</h2>
+            {% if documents %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>파일명</th>
+                        <th>유형</th>
+                        <th>상태</th>
+                        <th>청크</th>
+                        <th aria-label="Actions"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for doc in documents %}
+                    <tr>
+                        <td>
+                            <a href="/docs/{{ doc['filename'] }}" style="color: #1a237e; text-decoration: none;">
+                                {{ doc['filename'] }}
+                            </a>
+                        </td>
+                        <td>{{ doc['file_type'] | upper }}</td>
+                        <td>
+                            <span class="status-badge status-{{ doc['status'] }}">
+                                {{ doc['status'] }}
+                            </span>
+                        </td>
+                        <td>{{ doc['chunk_count'] or '-' }}</td>
+                        <td>
+                            <button class="btn btn-delete" onclick="deleteDocument('{{ doc['id'] }}', '{{ doc['filename'] }}')" title="삭제">✕</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p style="color: #999; font-size: 0.9rem;">아직 업로드된 문서가 없습니다.</p>
+            {% endif %}
+            <p style="margin-top: 0.8rem; font-size: 0.85rem; color: #888;">
+                총 청크: <strong>{{ total_chunks }}</strong>개
+            </p>
+        </div>
+    </div>
+
+    <!-- Right column: Chat & Search -->
+    <div>
+        <!-- Chat Card with Sidebar -->
+        <div class="card" style="padding:0; overflow:hidden;">
+            <div class="chat-layout">
+                <!-- Chat History Sidebar -->
+                <div class="chat-sidebar">
+                    <div class="chat-sidebar-header">
+                        <span>대화 목록</span>
+                        <button class="chat-new-btn" onclick="newChatSession()" title="새 대화">+ 새 대화</button>
+                    </div>
+                    <div class="chat-sidebar-list" id="chatSessionList"></div>
+                </div>
+                <!-- Chat Main Area -->
+                <div class="chat-main" style="padding:1.2rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2 style="margin-bottom:0; border-bottom:none; padding-bottom:0; font-size:1.1rem; color:#1a237e;">AI 질의응답</h2>
+                        <button type="button" class="btn-text" onclick="deleteCurrentChat()" title="현재 대화 삭제">삭제</button>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; margin-bottom:0.5rem;">
+                        <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; color:#555; cursor:pointer; user-select:none;">
+                            <span class="toggle-switch">
+                                <input type="checkbox" id="ragToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span id="ragLabel">문서 기반 답변 (RAG)</span>
+                        </label>
+                        <span id="ragModeHint" style="font-size:0.75rem; color:#888;">업로드된 문서에서 검색 후 답변</span>
+                    </div>
+                    <div style="border-bottom:2px solid #e8eaf6; margin-bottom:0.8rem;"></div>
+                    <div id="chatArea" style="flex:1; min-height:280px; max-height:420px; overflow-y:auto; padding:0.5rem; background:#fafafa; border-radius:6px; margin-bottom:0.8rem;">
+                        <p id="chatPlaceholder" style="color: #999; font-size: 0.9rem; text-align: center; padding-top: 2rem;">
+                            문서를 업로드하고 인덱싱한 후 질문하세요.
+                        </p>
+                    </div>
+                    <form id="chatForm">
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="text" id="chatInput" placeholder="질문을 입력하세요..." style="flex:1;" autocomplete="off">
+                            <button type="submit" class="btn btn-primary" id="chatSubmitBtn">질문</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Card -->
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2 style="margin-bottom:0; border-bottom:none; padding-bottom:0;">키워드 검색</h2>
+                <button type="button" class="btn-text" onclick="resetSearch()" title="검색 초기화">초기화</button>
+            </div>
+            <div style="border-bottom:2px solid #e8eaf6; margin-bottom:1rem;"></div>
+            <form id="searchForm">
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="searchInput" name="query" placeholder="검색어를 입력하세요..." style="flex:1;" autocomplete="off">
+                    <button type="submit" class="btn btn-primary">검색</button>
+                </div>
+            </form>
+            <div id="searchResults" style="margin-top: 1rem;"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Upload
+document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fileInput = document.getElementById('fileInput');
+    const msgDiv = document.getElementById('uploadMessage');
+
+    if (!fileInput.files.length) {
+        msgDiv.innerHTML = '<div class="flash-message flash-error">파일을 선택해주세요.</div>';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    msgDiv.innerHTML = '<div class="flash-message flash-info">업로드 중...</div>';
+
+    try {
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (res.ok) {
+            msgDiv.innerHTML = `<div class="flash-message flash-success">${data.message}</div>`;
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            msgDiv.innerHTML = `<div class="flash-message flash-error">${data.error}</div>`;
+        }
+    } catch (err) {
+        msgDiv.innerHTML = `<div class="flash-message flash-error">업로드 실패: ${err.message}</div>`;
+    }
+});
+
+// Indexing
+async function startIndexing(reindexAll) {
+    if (reindexAll && !confirm('모든 문서를 다시 인덱싱하시겠습니까?\n기존 검색 인덱스가 초기화됩니다.')) return;
+
+    const card = document.getElementById('indexingCard');
+    card.style.display = 'block';
+
+    try {
+        const formData = new FormData();
+        if (reindexAll) formData.append('reindex', 'all');
+        const res = await fetch('/index', { method: 'POST', body: reindexAll ? formData : undefined });
+        const data = await res.json();
+        if (!res.ok) {
+            document.getElementById('indexingMessage').textContent = data.error;
+            return;
+        }
+        pollIndexing();
+    } catch (err) {
+        document.getElementById('indexingMessage').textContent = 'Error: ' + err.message;
+    }
+}
+
+function pollIndexing() {
+    const interval = setInterval(async () => {
+        try {
+            const res = await fetch('/indexing-status');
+            const data = await res.json();
+            document.getElementById('progressBar').style.width = data.progress + '%';
+            document.getElementById('indexingMessage').textContent =
+                `${data.progress}% — ${data.message} ${data.current_file ? '(' + data.current_file + ')' : ''}`;
+
+            if (!data.running && data.progress > 0) {
+                clearInterval(interval);
+                setTimeout(() => location.reload(), 1500);
+            }
+        } catch (err) {
+            clearInterval(interval);
+        }
+    }, 500);
+}
+
+// Delete document
+async function deleteDocument(docId, filename) {
+    if (!confirm(`'${filename}' 문서를 삭제하시겠습니까?\n청크 데이터도 함께 삭제됩니다.`)) return;
+
+    try {
+        const res = await fetch(`/documents/${docId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            location.reload();
+        } else {
+            alert('삭제 실패: ' + data.error);
+        }
+    } catch (err) {
+        alert('삭제 실패: ' + err.message);
+    }
+}
+
+// Search
+document.getElementById('searchForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const query = document.getElementById('searchInput').value.trim();
+    const resultsDiv = document.getElementById('searchResults');
+
+    if (!query) return;
+
+    resultsDiv.innerHTML = '<p style="color:#999; font-size:0.9rem;">검색 중...</p>';
+
+    try {
+        const formData = new FormData();
+        formData.append('query', query);
+        const res = await fetch('/search', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (!res.ok) {
+            resultsDiv.innerHTML = `<div class="flash-message flash-error">${data.error || data.detail || JSON.stringify(data)}</div>`;
+            return;
+        }
+
+        if (!data.results || data.results.length === 0) {
+            resultsDiv.innerHTML = '<p style="color:#999; font-size:0.9rem;">검색 결과가 없습니다.</p>';
+            return;
+        }
+
+        let html = `<p style="font-size:0.85rem; color:#888; margin-bottom:0.8rem;">${data.total}개 결과</p>`;
+        data.results.forEach((r, i) => {
+            const semScore = r.semantic_score ? r.semantic_score.toFixed(3) : '-';
+            const bm25Score = r.bm25_score ? r.bm25_score.toFixed(3) : '-';
+            const rrfScore = r.rrf_score ? r.rrf_score.toFixed(4) : '-';
+            html += `
+                <div style="padding:0.8rem; margin-bottom:0.6rem; background:#fafafa; border-radius:6px; border-left:3px solid #1a237e;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                        <span style="font-size:0.8rem; font-weight:600; color:#1a237e;">#${i+1} ${r.filename || '알 수 없음'}</span>
+                        <span style="font-size:0.75rem; color:#888;">p.${r.page_number || '?'}</span>
+                    </div>
+                    <p style="font-size:0.85rem; margin-bottom:0.4rem; white-space:pre-wrap;">${r.text.substring(0, 300)}${r.text.length > 300 ? '...' : ''}</p>
+                    <div style="font-size:0.7rem; color:#aaa;">
+                        RRF: ${rrfScore} | Semantic: ${semScore} | BM25: ${bm25Score}
+                    </div>
+                </div>
+            `;
+        });
+        resultsDiv.innerHTML = html;
+        saveSearchHistory();
+    } catch (err) {
+        resultsDiv.innerHTML = `<div class="flash-message flash-error">검색 실패: ${err.message}</div>`;
+    }
+});
+
+// Chat (Phase D3 — RAG Q&A with SSE streaming)
+document.getElementById('chatForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('chatInput');
+    const chatArea = document.getElementById('chatArea');
+    const submitBtn = document.getElementById('chatSubmitBtn');
+    const query = input.value.trim();
+
+    if (!query) return;
+
+    // Remove placeholder
+    const placeholder = document.getElementById('chatPlaceholder');
+    if (placeholder) placeholder.remove();
+
+    // Update session title from first message
+    updateSessionTitle(query);
+
+    // Show user message
+    chatArea.innerHTML += `
+        <div style="margin-bottom:0.8rem; text-align:right;">
+            <span style="display:inline-block; background:#1a237e; color:white; padding:0.5rem 0.8rem; border-radius:12px 12px 0 12px; max-width:90%; font-size:0.9rem;">${escapeHtml(query)}</span>
+        </div>`;
+
+    // Prepare AI response container
+    const responseId = 'ai-response-' + Date.now();
+    chatArea.innerHTML += `
+        <div style="margin-bottom:0.8rem;">
+            <span id="${responseId}" style="display:inline-block; background:#e8eaf6; color:#333; padding:0.5rem 0.8rem; border-radius:12px 12px 12px 0; max-width:90%; font-size:0.9rem; white-space:pre-wrap;"><span class="typing-dots"><span></span><span></span><span></span></span></span>
+            <div id="${responseId}-sources" style="margin-top:0.3rem;"></div>
+        </div>`;
+    chatArea.scrollTop = chatArea.scrollHeight;
+
+    // Disable input while streaming
+    input.disabled = true;
+    submitBtn.disabled = true;
+    input.value = '';
+
+    const responseSpan = document.getElementById(responseId);
+    const sourcesDiv = document.getElementById(responseId + '-sources');
+    let firstToken = true;
+
+    try {
+        const formData = new FormData();
+        formData.append('query', query);
+        formData.append('use_rag', document.getElementById('ragToggle').checked ? 'on' : 'off');
+        const res = await fetch('/chat', { method: 'POST', body: formData });
+
+        // Check for non-streaming JSON response (error or no-context fallback)
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data.error) {
+                responseSpan.textContent = data.error;
+                responseSpan.style.background = '#ffebee';
+                responseSpan.style.color = '#c62828';
+            } else if (data.answer) {
+                responseSpan.textContent = data.answer;
+            }
+            input.disabled = false;
+            submitBtn.disabled = false;
+            input.focus();
+            return;
+        }
+
+        // SSE streaming
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            let eventType = null;
+            for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                    eventType = line.slice(7).trim();
+                } else if (line.startsWith('data: ') && eventType) {
+                    const payload = JSON.parse(line.slice(6));
+                    if (eventType === 'token') {
+                        if (firstToken) { responseSpan.textContent = ''; firstToken = false; }
+                        responseSpan.textContent += payload.token;
+                        chatArea.scrollTop = chatArea.scrollHeight;
+                    } else if (eventType === 'done') {
+                        if (payload.sources && payload.sources.length > 0) {
+                            const srcHtml = payload.sources
+                                .filter(s => s.filename)
+                                .map(s => `<span style="font-size:0.7rem; color:#888; background:#f0f0f0; padding:0.1rem 0.4rem; border-radius:4px; margin-right:0.3rem;">${s.filename} p.${s.page_number}</span>`)
+                                .join('');
+                            if (srcHtml) sourcesDiv.innerHTML = srcHtml;
+                        }
+                    } else if (eventType === 'error') {
+                        responseSpan.textContent = payload.error;
+                        responseSpan.style.background = '#ffebee';
+                        responseSpan.style.color = '#c62828';
+                    }
+                    eventType = null;
+                }
+            }
+        }
+    } catch (err) {
+        responseSpan.textContent = 'LLM 연결 오류: ' + err.message;
+        responseSpan.style.background = '#ffebee';
+        responseSpan.style.color = '#c62828';
+    } finally {
+        input.disabled = false;
+        submitBtn.disabled = false;
+        input.focus();
+        chatArea.scrollTop = chatArea.scrollHeight;
+    }
+});
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// --- Chat session management (multi-session with localStorage) ---
+let currentSessionId = null;
+const PLACEHOLDER_HTML = '<p id="chatPlaceholder" style="color: #999; font-size: 0.9rem; text-align: center; padding-top: 2rem;">문서를 업로드하고 인덱싱한 후 질문하세요.</p>';
+
+function getChatSessions() {
+    try { return JSON.parse(localStorage.getItem('chatSessions') || '[]'); }
+    catch { return []; }
+}
+function saveChatSessions(sessions) {
+    localStorage.setItem('chatSessions', JSON.stringify(sessions));
+}
+
+function saveChatHistory() {
+    if (!currentSessionId) return;
+    const chatArea = document.getElementById('chatArea');
+    const sessions = getChatSessions();
+    const session = sessions.find(s => s.id === currentSessionId);
+    if (session) {
+        session.html = chatArea.innerHTML;
+        session.updated = Date.now();
+        saveChatSessions(sessions);
+    }
+}
+
+function newChatSession() {
+    const sessions = getChatSessions();
+    const id = 'chat-' + Date.now();
+    sessions.unshift({ id, title: '새 대화', html: PLACEHOLDER_HTML, created: Date.now(), updated: Date.now() });
+    saveChatSessions(sessions);
+    switchToSession(id);
+}
+
+function switchToSession(id) {
+    // Save current before switching
+    if (currentSessionId) saveChatHistory();
+    currentSessionId = id;
+    localStorage.setItem('activeSessionId', id);
+    const sessions = getChatSessions();
+    const session = sessions.find(s => s.id === id);
+    const chatArea = document.getElementById('chatArea');
+    chatArea.innerHTML = session ? session.html : PLACEHOLDER_HTML;
+    chatArea.scrollTop = chatArea.scrollHeight;
+    renderSessionList();
+}
+
+function deleteSession(id, e) {
+    if (e) e.stopPropagation();
+    let sessions = getChatSessions();
+    sessions = sessions.filter(s => s.id !== id);
+    saveChatSessions(sessions);
+    if (id === currentSessionId) {
+        if (sessions.length > 0) {
+            switchToSession(sessions[0].id);
+        } else {
+            newChatSession();
+        }
+    } else {
+        renderSessionList();
+    }
+}
+
+function deleteCurrentChat() {
+    if (currentSessionId) deleteSession(currentSessionId);
+}
+
+function updateSessionTitle(query) {
+    const sessions = getChatSessions();
+    const session = sessions.find(s => s.id === currentSessionId);
+    if (session && session.title === '새 대화') {
+        session.title = query.length > 25 ? query.substring(0, 25) + '...' : query;
+        saveChatSessions(sessions);
+        renderSessionList();
+    }
+}
+
+function renderSessionList() {
+    const list = document.getElementById('chatSessionList');
+    const sessions = getChatSessions();
+    list.innerHTML = sessions.map(s => `
+        <div class="chat-history-item ${s.id === currentSessionId ? 'active' : ''}" onclick="switchToSession('${s.id}')">
+            <span class="chat-history-title">${escapeHtml(s.title)}</span>
+            <button class="chat-delete-btn" onclick="deleteSession('${s.id}', event)" title="삭제">&times;</button>
+        </div>
+    `).join('');
+}
+
+// --- Search persistence ---
+function saveSearchHistory() {
+    const resultsDiv = document.getElementById('searchResults');
+    const query = document.getElementById('searchInput').value;
+    sessionStorage.setItem('searchResults', resultsDiv.innerHTML);
+    sessionStorage.setItem('searchQuery', query);
+}
+function restoreSearchHistory() {
+    const savedResults = sessionStorage.getItem('searchResults');
+    const savedQuery = sessionStorage.getItem('searchQuery');
+    if (savedResults) document.getElementById('searchResults').innerHTML = savedResults;
+    if (savedQuery) document.getElementById('searchInput').value = savedQuery;
+}
+function resetSearch() {
+    document.getElementById('searchInput').value = '';
+    document.getElementById('searchResults').innerHTML = '';
+    sessionStorage.removeItem('searchResults');
+    sessionStorage.removeItem('searchQuery');
+}
+
+// RAG toggle
+const ragToggle = document.getElementById('ragToggle');
+const ragLabel = document.getElementById('ragLabel');
+const ragModeHint = document.getElementById('ragModeHint');
+const chatInputEl = document.getElementById('chatInput');
+
+function updateRagUI() {
+    const ph = document.getElementById('chatPlaceholder');
+    if (ragToggle.checked) {
+        ragLabel.textContent = '문서 기반 답변 (RAG)';
+        ragModeHint.textContent = '업로드된 문서에서 검색 후 답변';
+        chatInputEl.placeholder = '질문을 입력하세요...';
+        if (ph) ph.textContent = '문서를 업로드하고 인덱싱한 후 질문하세요.';
+    } else {
+        ragLabel.textContent = '자유 대화';
+        ragModeHint.textContent = 'LLM이 자체 지식으로 답변';
+        chatInputEl.placeholder = '무엇이든 질문하세요...';
+        if (ph) ph.textContent = 'AI에게 무엇이든 질문해보세요.';
+    }
+}
+ragToggle.addEventListener('change', updateRagUI);
+updateRagUI();
+
+// Initialize sessions on load
+(function initChatSessions() {
+    const sessions = getChatSessions();
+    const activeId = localStorage.getItem('activeSessionId');
+    if (sessions.length === 0) {
+        newChatSession();
+    } else if (activeId && sessions.find(s => s.id === activeId)) {
+        switchToSession(activeId);
+    } else {
+        switchToSession(sessions[0].id);
+    }
+})();
+restoreSearchHistory();
+
+// Auto-save chat on changes
+const chatObserver = new MutationObserver(saveChatHistory);
+chatObserver.observe(document.getElementById('chatArea'), { childList: true, subtree: true, characterData: true });
+</script>
+{% endblock %}

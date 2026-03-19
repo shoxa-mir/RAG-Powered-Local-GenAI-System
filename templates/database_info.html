@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
+    <!-- Left column: Statistics -->
+    <div>
+        <div class="card">
+            <h2>데이터베이스 통계</h2>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem;">
+                <div style="text-align:center; padding:1rem; background:#f5f7fa; border-radius:8px;">
+                    <div style="font-size:2rem; font-weight:700; color:#1a237e;">{{ doc_count }}</div>
+                    <div style="font-size:0.85rem; color:#666;">총 문서</div>
+                </div>
+                <div style="text-align:center; padding:1rem; background:#f5f7fa; border-radius:8px;">
+                    <div style="font-size:2rem; font-weight:700; color:#2e7d32;">{{ indexed_count }}</div>
+                    <div style="font-size:0.85rem; color:#666;">인덱싱 완료</div>
+                </div>
+                <div style="text-align:center; padding:1rem; background:#f5f7fa; border-radius:8px;">
+                    <div style="font-size:2rem; font-weight:700; color:#1a237e;">{{ chunk_count }}</div>
+                    <div style="font-size:0.85rem; color:#666;">총 청크</div>
+                </div>
+                <div style="text-align:center; padding:1rem; background:#f5f7fa; border-radius:8px;">
+                    <div style="font-size:2rem; font-weight:700; color:#1a237e;">{{ "{:,}".format(total_chars) }}</div>
+                    <div style="font-size:0.85rem; color:#666;">총 문자</div>
+                </div>
+            </div>
+            <div style="text-align:center; margin-top:1rem;">
+                <a href="/" class="btn btn-secondary" style="text-decoration:none;">홈으로</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right column: Sample chunks -->
+    <div>
+        <div class="card">
+            <h2>샘플 청크 (랜덤 5개)</h2>
+            {% if sample_chunks %}
+                {% for chunk in sample_chunks %}
+                <div style="padding:0.8rem; margin-bottom:0.6rem; background:#fafafa; border-radius:6px; border-left:3px solid #1a237e;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+                        <span style="font-size:0.8rem; font-weight:600; color:#1a237e;">페이지 {{ chunk['page_number'] }}</span>
+                    </div>
+                    <p style="font-size:0.85rem; white-space:pre-wrap; word-break:break-word;">{{ chunk['text'][:300] }}{% if chunk['text'] | length > 300 %}...{% endif %}</p>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="color:#999; font-size:0.9rem; text-align:center; padding:2rem 0;">인덱싱된 청크가 없습니다.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
