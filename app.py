@@ -773,7 +773,7 @@ async def database_info_page(request: Request):
         total_chars_row = await cur_chars.fetchone()
         total_chars = total_chars_row["total"] or 0
 
-        cur_samples = await db.execute("SELECT text, page_number, document_id FROM chunks ORDER BY RANDOM() LIMIT 5")
+        cur_samples = await db.execute("SELECT text, page_number, document_id FROM chunks ORDER BY RANDOM() LIMIT 3")
         sample_chunks = await cur_samples.fetchall()
     finally:
         await db.close()
