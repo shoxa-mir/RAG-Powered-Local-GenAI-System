@@ -1,5 +1,5 @@
 # AI 문서검색 시스템 — 사용 가이드
-
+[![CI](https://github.com/shoxa-mir/RAG-Powered-Local-GenAI-System/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shoxa-mir/RAG-Powered-Local-GenAI-System/actions/workflows/ci.yml)
 ## 사전 요구사항
 
 - **Docker Desktop** (Docker Compose 포함)
