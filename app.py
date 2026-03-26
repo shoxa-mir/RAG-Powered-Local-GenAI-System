@@ -736,7 +736,7 @@ async def index_page(request: Request):
     """Main page: upload, search, chat."""
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM documents ORDER BY upload_time DESC")
+        cursor = await db.execute("SELECT * FROM documents ORDER BY filename ASC")
         documents = await cursor.fetchall()
         cursor2 = await db.execute("SELECT COUNT(*) as cnt FROM chunks")
         chunk_row = await cursor2.fetchone()

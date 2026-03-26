@@ -9,8 +9,8 @@
             <h2>문서 업로드</h2>
             <form id="uploadForm" enctype="multipart/form-data">
                 <div style="margin-bottom: 1rem;">
-                    <input type="file" id="fileInput" name="file" accept=".pdf,.docx" />
-                    <small style="color: #888; display: block; margin-top: 0.3rem;">PDF, DOCX 파일 지원</small>
+                    <input type="file" id="fileInput" name="files" accept=".pdf,.docx" multiple />
+                    <small style="color: #888; display: block; margin-top: 0.3rem;">PDF, DOCX 파일 지원 (여러 파일 선택 가능)</small>
                 </div>
                 <button type="submit" class="btn btn-primary">업로드</button>
                 <button type="button" class="btn btn-success" onclick="startIndexing(false)" style="margin-left: 0.5rem;">인덱싱 시작</button>
@@ -30,21 +30,29 @@
 
         <!-- Documents List Card -->
         <div class="card">
-            <h2>업로드된 문서 ({{ documents | length }}개)</h2>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2 style="margin-bottom:0; border-bottom:none; padding-bottom:0;">업로드된 문서 ({{ documents | length }}개)</h2>
+                {% if documents %}
+                <button class="btn btn-delete" id="deleteSelectedBtn" onclick="deleteSelected()" style="display:none; font-size:0.8rem; padding:0.3rem 0.8rem;">선택 삭제</button>
+                {% endif %}
+            </div>
+            <div style="border-bottom:2px solid #e8eaf6; margin-bottom:1rem;"></div>
             {% if documents %}
+            <div style="max-height:500px; overflow-y:auto;">
             <table>
                 <thead>
                     <tr>
+                        <th style="width:2rem; text-align:center;"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)"></th>
                         <th>파일명</th>
                         <th>유형</th>
                         <th>상태</th>
                         <th>청크</th>
-                        <th aria-label="Actions"></th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for doc in documents %}
                     <tr>
+                        <td style="text-align:center;"><input type="checkbox" class="doc-checkbox" value="{{ doc['id'] }}" data-filename="{{ doc['filename'] }}" onchange="updateDeleteBtn()"></td>
                         <td>
                             <a href="/docs/{{ doc['filename'] }}" style="color: #1a237e; text-decoration: none;">
                                 {{ doc['filename'] }}
@@ -57,13 +65,11 @@
                             </span>
                         </td>
                         <td>{{ doc['chunk_count'] or '-' }}</td>
-                        <td>
-                            <button class="btn btn-delete" onclick="deleteDocument('{{ doc['id'] }}', '{{ doc['filename'] }}')" title="삭제">✕</button>
-                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
             {% else %}
             <p style="color: #999; font-size: 0.9rem;">아직 업로드된 문서가 없습니다.</p>
             {% endif %}
@@ -103,7 +109,7 @@
                         <span id="ragModeHint" style="font-size:0.75rem; color:#888;">업로드된 문서에서 검색 후 답변</span>
                     </div>
                     <div style="border-bottom:2px solid #e8eaf6; margin-bottom:0.8rem;"></div>
-                    <div id="chatArea" style="flex:1; min-height:280px; max-height:420px; overflow-y:auto; padding:0.5rem; background:#fafafa; border-radius:6px; margin-bottom:0.8rem;">
+                    <div id="chatArea" style="flex:1; min-height:350px; max-height:600px; overflow-y:auto; padding:0.5rem; background:#fafafa; border-radius:6px; margin-bottom:0.8rem;">
                         <p id="chatPlaceholder" style="color: #999; font-size: 0.9rem; text-align: center; padding-top: 2rem;">
                             문서를 업로드하고 인덱싱한 후 질문하세요.
                         </p>
@@ -139,34 +145,46 @@
 
 {% block scripts %}
 <script>
-// Upload
+// Upload (multiple files)
 document.getElementById('uploadForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fileInput = document.getElementById('fileInput');
     const msgDiv = document.getElementById('uploadMessage');
+    const files = fileInput.files;
 
-    if (!fileInput.files.length) {
+    if (!files.length) {
         msgDiv.innerHTML = '<div class="flash-message flash-error">파일을 선택해주세요.</div>';
         return;
     }
 
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
+    msgDiv.innerHTML = `<div class="flash-message flash-info">업로드 중... (0/${files.length})</div>`;
 
-    msgDiv.innerHTML = '<div class="flash-message flash-info">업로드 중...</div>';
+    let success = 0;
+    let errors = [];
 
-    try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (res.ok) {
-            msgDiv.innerHTML = `<div class="flash-message flash-success">${data.message}</div>`;
-            setTimeout(() => location.reload(), 1000);
-        } else {
-            msgDiv.innerHTML = `<div class="flash-message flash-error">${data.error}</div>`;
+    for (let i = 0; i < files.length; i++) {
+        try {
+            const formData = new FormData();
+            formData.append('file', files[i]);
+            msgDiv.innerHTML = `<div class="flash-message flash-info">업로드 중... (${i + 1}/${files.length}) — ${files[i].name}</div>`;
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (res.ok) {
+                success++;
+            } else {
+                errors.push(`${files[i].name}: ${data.error}`);
+            }
+        } catch (err) {
+            errors.push(`${files[i].name}: ${err.message}`);
         }
-    } catch (err) {
-        msgDiv.innerHTML = `<div class="flash-message flash-error">업로드 실패: ${err.message}</div>`;
     }
+
+    let html = '';
+    if (success > 0) html += `<div class="flash-message flash-success">${success}개 파일 업로드 완료</div>`;
+    if (errors.length > 0) html += `<div class="flash-message flash-error">${errors.join('<br>')}</div>`;
+    msgDiv.innerHTML = html;
+
+    if (success > 0) setTimeout(() => location.reload(), 1000);
 });
 
 // Indexing
@@ -210,21 +228,46 @@ function pollIndexing() {
     }, 500);
 }
 
-// Delete document
-async function deleteDocument(docId, filename) {
-    if (!confirm(`'${filename}' 문서를 삭제하시겠습니까?\n청크 데이터도 함께 삭제됩니다.`)) return;
+// Document selection
+function toggleSelectAll(el) {
+    document.querySelectorAll('.doc-checkbox').forEach(cb => cb.checked = el.checked);
+    updateDeleteBtn();
+}
 
-    try {
-        const res = await fetch(`/documents/${docId}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (res.ok) {
-            location.reload();
-        } else {
-            alert('삭제 실패: ' + data.error);
-        }
-    } catch (err) {
-        alert('삭제 실패: ' + err.message);
+function updateDeleteBtn() {
+    const checked = document.querySelectorAll('.doc-checkbox:checked');
+    const btn = document.getElementById('deleteSelectedBtn');
+    if (btn) {
+        btn.style.display = checked.length > 0 ? 'inline-block' : 'none';
+        btn.textContent = `선택 삭제 (${checked.length})`;
     }
+    const selectAll = document.getElementById('selectAll');
+    const all = document.querySelectorAll('.doc-checkbox');
+    if (selectAll) selectAll.checked = all.length > 0 && checked.length === all.length;
+}
+
+async function deleteSelected() {
+    const checked = document.querySelectorAll('.doc-checkbox:checked');
+    if (!checked.length) return;
+
+    const names = Array.from(checked).map(cb => cb.dataset.filename).join('\n');
+    if (!confirm(`${checked.length}개 문서를 삭제하시겠습니까?\n청크 데이터도 함께 삭제됩니다.\n\n${names}`)) return;
+
+    let errors = [];
+    for (const cb of checked) {
+        try {
+            const res = await fetch(`/documents/${cb.value}`, { method: 'DELETE' });
+            if (!res.ok) {
+                const data = await res.json();
+                errors.push(`${cb.dataset.filename}: ${data.error}`);
+            }
+        } catch (err) {
+            errors.push(`${cb.dataset.filename}: ${err.message}`);
+        }
+    }
+
+    if (errors.length > 0) alert('일부 삭제 실패:\n' + errors.join('\n'));
+    location.reload();
 }
 
 // Search

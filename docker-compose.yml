@@ -53,7 +53,7 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:8000/v1/models', headers={'Authorization': 'Bearer sk-local'}))"]
       interval: 30s
       timeout: 10s
       retries: 3
