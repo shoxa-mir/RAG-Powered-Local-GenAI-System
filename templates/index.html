@@ -361,11 +361,23 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
     const responseSpan = document.getElementById(responseId);
     const sourcesDiv = document.getElementById(responseId + '-sources');
     let firstToken = true;
+    let responseText = '';
+
+    // Record user message and build history for server
+    const sessionsBefore = getChatSessions();
+    const sessionBefore = sessionsBefore.find(s => s.id === currentSessionId);
+    if (sessionBefore) {
+        sessionBefore.messages = sessionBefore.messages || [];
+        sessionBefore.messages.push({ role: 'user', content: query });
+        saveChatSessions(sessionsBefore);
+    }
+    const historyToSend = (sessionBefore ? sessionBefore.messages : []).slice(0, -1).slice(-20);
 
     try {
         const formData = new FormData();
         formData.append('query', query);
         formData.append('use_rag', document.getElementById('ragToggle').checked ? 'on' : 'off');
+        formData.append('history', JSON.stringify(historyToSend));
         const res = await fetch('/chat', { method: 'POST', body: formData });
 
         // Check for non-streaming JSON response (error or no-context fallback)
@@ -378,6 +390,10 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
                 responseSpan.style.color = '#c62828';
             } else if (data.answer) {
                 responseSpan.textContent = data.answer;
+                // Record assistant answer in session
+                const s2 = getChatSessions();
+                const sess2 = s2.find(s => s.id === currentSessionId);
+                if (sess2) { sess2.messages = sess2.messages || []; sess2.messages.push({ role: 'assistant', content: data.answer }); saveChatSessions(s2); }
             }
             input.disabled = false;
             submitBtn.disabled = false;
@@ -407,8 +423,15 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
                     if (eventType === 'token') {
                         if (firstToken) { responseSpan.textContent = ''; firstToken = false; }
                         responseSpan.textContent += payload.token;
+                        responseText += payload.token;
                         chatArea.scrollTop = chatArea.scrollHeight;
                     } else if (eventType === 'done') {
+                        // Record assistant response in session messages
+                        if (responseText) {
+                            const s2 = getChatSessions();
+                            const sess2 = s2.find(s => s.id === currentSessionId);
+                            if (sess2) { sess2.messages = sess2.messages || []; sess2.messages.push({ role: 'assistant', content: responseText }); saveChatSessions(s2); }
+                        }
                         if (payload.sources && payload.sources.length > 0) {
                             const srcHtml = payload.sources
                                 .filter(s => s.filename)
@@ -470,7 +493,7 @@ function saveChatHistory() {
 function newChatSession() {
     const sessions = getChatSessions();
     const id = 'chat-' + Date.now();
-    sessions.unshift({ id, title: '새 대화', html: PLACEHOLDER_HTML, created: Date.now(), updated: Date.now() });
+    sessions.unshift({ id, title: '새 대화', html: PLACEHOLDER_HTML, messages: [], created: Date.now(), updated: Date.now() });
     saveChatSessions(sessions);
     switchToSession(id);
 }
