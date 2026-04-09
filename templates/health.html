@@ -53,8 +53,8 @@
                 <span id="liveClock" style="font-size:0.8rem; color:#999; font-weight:400;"></span>
             </h2>
             <div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:1.5rem;">
-                <span id="statusDot" style="display:inline-block; width:14px; height:14px; border-radius:50%; background:{{ '#2e7d32' if health.status == 'ok' else '#c62828' }};"></span>
-                <span id="statusText" style="font-size:1.1rem; font-weight:600; color:{{ '#2e7d32' if health.status == 'ok' else '#c62828' }};">
+                <span id="statusDot" style="display:inline-block; width:14px; height:14px; border-radius:50%;"></span>
+                <span id="statusText" style="font-size:1.1rem; font-weight:600;">
                     {{ '정상 운영 중' if health.status == 'ok' else '오류 발생' }}
                 </span>
             </div>

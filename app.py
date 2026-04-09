@@ -33,7 +33,7 @@ from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 from sse_starlette.sse import EventSourceResponse
 
 # ---------------------------------------------------------------------------
@@ -122,6 +122,9 @@ QDRANT_COLLECTION = CONFIG["qdrant"]["collection_name"]
 EMBEDDING_MODEL_NAME = CONFIG["embedding"]["model_name"]
 EMBEDDING_DEVICE = CONFIG["embedding"].get("device", "cpu")
 SEARCH_CONFIG = CONFIG["search"]
+RERANKER_CONFIG = CONFIG.get("reranker", {})
+RERANKER_CANDIDATES = RERANKER_CONFIG.get("candidates", 20)
+RERANKER_FINAL_K = RERANKER_CONFIG.get("final_results", 5)
 
 # Phase D3: LLM config
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", CONFIG["llm"]["base_url"])
@@ -131,6 +134,7 @@ LLM_TEMPERATURE = CONFIG["llm"]["temperature"]
 
 # These are initialized at startup
 embedding_model: Optional[SentenceTransformer] = None
+reranker_model: Optional[CrossEncoder] = None
 qdrant_client: Optional[QdrantClient] = None
 llm_client: Optional[OpenAI] = None
 bm25_index: Optional[BM25Okapi] = None
@@ -146,6 +150,34 @@ def init_embedding_model():
     dim = embedding_model.get_sentence_embedding_dimension()
     logger.info("Embedding model loaded — dimension: %d, device: %s", dim, EMBEDDING_DEVICE)
     return dim
+
+
+def init_reranker():
+    """Load the Korean cross-encoder reranker model."""
+    global reranker_model
+    model_name = RERANKER_CONFIG.get("model_name", "")
+    device = RERANKER_CONFIG.get("device", "cpu")
+    if not model_name:
+        logger.info("No reranker model configured — skipping.")
+        return
+    logger.info("Loading reranker model: %s ...", model_name)
+    try:
+        reranker_model = CrossEncoder(model_name, device=device)
+        logger.info("Reranker model loaded: %s", model_name)
+    except Exception as e:
+        logger.warning("Failed to load reranker: %s — reranking disabled", e)
+        reranker_model = None
+
+
+def rerank_results(query: str, candidates: list[dict]) -> list[dict]:
+    """Rerank hybrid search candidates using cross-encoder, return top final_k."""
+    if not reranker_model or not candidates:
+        return candidates[:RERANKER_FINAL_K]
+    pairs = [[query, c["text"]] for c in candidates]
+    scores = reranker_model.predict(pairs)
+    for candidate, score in zip(candidates, scores):
+        candidate["rerank_score"] = float(score)
+    return sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)[:RERANKER_FINAL_K]
 
 
 def init_qdrant(vector_dim: int):
@@ -382,9 +414,10 @@ def hybrid_search(query: str) -> list[dict]:
         rrf_scores[cid]["rrf_score"] += rrf
         rrf_scores[cid]["bm25_score"] = r["score"]
 
-    # Sort by RRF score descending
+    # Sort by RRF score descending; return more candidates when reranker is active
     ranked = sorted(rrf_scores.values(), key=lambda x: x["rrf_score"], reverse=True)
-    return ranked[:final_results]
+    top_k = RERANKER_CANDIDATES if reranker_model else final_results
+    return ranked[:top_k]
 
 
 def enrich_search_results(results: list[dict], conn: sqlite3.Connection) -> list[dict]:
@@ -557,6 +590,9 @@ def process_documents_sync():
     """
     Synchronous document processing (runs in background thread).
     Extracts text, chunks it, stores in SQLite, embeds into Qdrant, builds BM25.
+
+    Optimized for batch processing: extracts/chunks all docs first, then embeds
+    all chunks in a single model.encode() call for maximum GPU utilization.
     """
     global indexing_state
     indexing_state["running"] = True
@@ -567,7 +603,6 @@ def process_documents_sync():
     conn.row_factory = sqlite3.Row
 
     try:
-        # Get documents that haven't been indexed yet
         rows = conn.execute("SELECT * FROM documents WHERE status = 'uploaded'").fetchall()
 
         if not rows:
@@ -575,7 +610,13 @@ def process_documents_sync():
             indexing_state["running"] = False
             return
 
-        indexing_state["total_files"] = len(rows)
+        total_files = len(rows)
+        indexing_state["total_files"] = total_files
+
+        # --- Phase 1: Extract text and chunk all documents ---
+        # Each entry: (doc_id, filename, page_count, chunks_list)
+        doc_results = []
+        all_chunks = []  # flat list across all docs for batch embedding
 
         for idx, row in enumerate(rows):
             doc_id = row["id"]
@@ -584,107 +625,128 @@ def process_documents_sync():
             file_type = row["file_type"]
 
             indexing_state["current_file"] = filename
-            indexing_state["message"] = f"Extracting text from {filename}..."
-            logger.info("Processing [%d/%d]: %s", idx + 1, len(rows), filename)
+            indexing_state["message"] = f"Extracting [{idx + 1}/{total_files}] {filename}..."
+            logger.info("Extracting [%d/%d]: %s", idx + 1, total_files, filename)
 
-            # Extract text
             pages = extract_text(filepath, file_type)
             if not pages:
                 conn.execute("UPDATE documents SET status = 'error' WHERE id = ?", (doc_id,))
                 conn.commit()
                 logger.warning("No text extracted from %s", filename)
-                indexing_state["progress"] = int((idx + 1) / len(rows) * 100)
+                indexing_state["progress"] = int((idx + 1) / total_files * 30)
                 continue
 
-            page_count = len(pages)
-
-            # Chunk all pages
-            indexing_state["message"] = f"Chunking {filename}..."
-            all_chunks = []
+            doc_chunks = []
             for page_data in pages:
                 page_num = page_data["page"]
                 page_text = page_data["text"]
-                page_chunks = chunk_text(page_text)
-                for ci, chunk_text_val in enumerate(page_chunks):
-                    all_chunks.append(
-                        {
-                            "id": str(uuid.uuid4()),
-                            "document_id": doc_id,
-                            "chunk_index": len(all_chunks),
-                            "text": chunk_text_val,
-                            "page_number": page_num,
-                            "char_count": len(chunk_text_val),
-                        }
-                    )
+                for chunk_text_val in chunk_text(page_text):
+                    chunk = {
+                        "id": str(uuid.uuid4()),
+                        "document_id": doc_id,
+                        "chunk_index": len(doc_chunks),
+                        "text": chunk_text_val,
+                        "page_number": page_num,
+                        "char_count": len(chunk_text_val),
+                        "filename": filename,
+                    }
+                    doc_chunks.append(chunk)
 
-            # Store chunks in SQLite
-            for chunk in all_chunks:
-                conn.execute(
-                    """INSERT OR REPLACE INTO chunks
-                       (id, document_id, chunk_index, text, page_number, char_count)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (
-                        chunk["id"],
-                        chunk["document_id"],
-                        chunk["chunk_index"],
-                        chunk["text"],
-                        chunk["page_number"],
-                        chunk["char_count"],
-                    ),
+            doc_results.append((doc_id, filename, len(pages), doc_chunks))
+            all_chunks.extend(doc_chunks)
+            indexing_state["progress"] = int((idx + 1) / total_files * 30)
+
+        if not all_chunks:
+            indexing_state["message"] = "No chunks extracted."
+            indexing_state["running"] = False
+            conn.close()
+            return
+
+        logger.info("Extraction complete: %d docs, %d total chunks", len(doc_results), len(all_chunks))
+
+        # --- Phase 2: Batch insert chunks into SQLite ---
+        indexing_state["message"] = f"Saving {len(all_chunks)} chunks to database..."
+        indexing_state["progress"] = 35
+        conn.executemany(
+            """INSERT OR REPLACE INTO chunks
+               (id, document_id, chunk_index, text, page_number, char_count)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [
+                (c["id"], c["document_id"], c["chunk_index"], c["text"], c["page_number"], c["char_count"])
+                for c in all_chunks
+            ],
+        )
+        conn.commit()
+        indexing_state["progress"] = 40
+
+        # --- Phase 3: Embed chunks in batches with progress ---
+        if embedding_model and qdrant_client:
+            total_chunks = len(all_chunks)
+            texts = [c["text"] for c in all_chunks]
+            embed_batch_size = 64
+            all_embeddings = []
+
+            for batch_start in range(0, total_chunks, embed_batch_size):
+                batch_end = min(batch_start + embed_batch_size, total_chunks)
+                batch_texts = texts[batch_start:batch_end]
+                batch_emb = embedding_model.encode(batch_texts, show_progress_bar=False, batch_size=embed_batch_size)
+                all_embeddings.extend(batch_emb)
+
+                # Progress: 40-80% for embedding
+                embed_progress = 40 + int((batch_end / total_chunks) * 40)
+                indexing_state["progress"] = embed_progress
+                indexing_state["message"] = f"Embedding {batch_end}/{total_chunks} chunks..."
+
+            logger.info("Embedded %d chunks", total_chunks)
+
+            # --- Phase 4: Batch upsert to Qdrant with progress ---
+            points = [
+                PointStruct(
+                    id=chunk["id"],
+                    vector=emb.tolist(),
+                    payload={
+                        "text": chunk["text"],
+                        "document_id": chunk["document_id"],
+                        "filename": chunk["filename"],
+                        "page_number": chunk["page_number"],
+                        "chunk_index": chunk["chunk_index"],
+                    },
                 )
+                for chunk, emb in zip(all_chunks, all_embeddings)
+            ]
 
-            # Generate embeddings and upsert to Qdrant
-            if embedding_model and qdrant_client:
-                indexing_state["message"] = f"Embedding {filename}..."
-                texts = [c["text"] for c in all_chunks]
-                embeddings = embedding_model.encode(texts, show_progress_bar=False, batch_size=32)
+            for i in range(0, len(points), 200):
+                qdrant_client.upsert(
+                    collection_name=QDRANT_COLLECTION,
+                    points=points[i : i + 200],
+                )
+                upsert_progress = 80 + int(((i + 200) / len(points)) * 10)
+                indexing_state["progress"] = min(upsert_progress, 90)
+                indexing_state["message"] = f"Uploading {min(i + 200, len(points))}/{len(points)} vectors..."
 
-                points = [
-                    PointStruct(
-                        id=chunk["id"],
-                        vector=emb.tolist(),
-                        payload={
-                            "text": chunk["text"],
-                            "document_id": chunk["document_id"],
-                            "filename": filename,
-                            "page_number": chunk["page_number"],
-                            "chunk_index": chunk["chunk_index"],
-                        },
-                    )
-                    for chunk, emb in zip(all_chunks, embeddings)
-                ]
+            logger.info("Upserted %d vectors to Qdrant", len(points))
+            indexing_state["progress"] = 90
 
-                # Upsert in batches of 100
-                for i in range(0, len(points), 100):
-                    qdrant_client.upsert(
-                        collection_name=QDRANT_COLLECTION,
-                        points=points[i : i + 100],
-                    )
-                logger.info("Upserted %d vectors to Qdrant for %s", len(points), filename)
-
-            # Update document status
+        # --- Phase 5: Update document statuses ---
+        now_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
+        for doc_id, filename, page_count, doc_chunks in doc_results:
             conn.execute(
                 """UPDATE documents
                    SET status = 'indexed', page_count = ?, chunk_count = ?, indexed_time = ?
                    WHERE id = ?""",
-                (
-                    page_count,
-                    len(all_chunks),
-                    datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S"),
-                    doc_id,
-                ),
+                (page_count, len(doc_chunks), now_kst, doc_id),
             )
-            conn.commit()
+            logger.info("Indexed %s: %d pages, %d chunks", filename, page_count, len(doc_chunks))
+        conn.commit()
 
-            logger.info("Indexed %s: %d pages, %d chunks", filename, page_count, len(all_chunks))
-            indexing_state["progress"] = int((idx + 1) / len(rows) * 100)
-
-        # Rebuild BM25 index from all chunks
+        # --- Phase 6: Rebuild BM25 ---
         indexing_state["message"] = "Building BM25 index..."
+        indexing_state["progress"] = 95
         build_bm25_from_db(conn)
 
         indexing_state["message"] = "Indexing complete."
-        logger.info("All documents indexed successfully.")
+        indexing_state["progress"] = 100
+        logger.info("All %d documents indexed successfully (%d chunks).", len(doc_results), len(all_chunks))
 
     except Exception as e:
         logger.error("Indexing error: %s", e)
@@ -706,6 +768,7 @@ async def lifespan(app: FastAPI):
 
     # Phase D2: Initialize search components
     vector_dim = init_embedding_model()
+    init_reranker()
     init_qdrant(vector_dim)
     load_bm25_index()
 
@@ -820,6 +883,7 @@ async def health_check(request: Request, format: str = ""):
         "chunks": chunk_count,
         "indexing": indexing_state["running"],
         "embedding_model": "loaded" if embedding_model else "not_loaded",
+        "reranker_model": "loaded" if reranker_model else "not_loaded",
         "bm25_docs": len(bm25_chunk_ids),
         "services": {
             "qdrant": "connected" if qdrant_client else "not_connected",
@@ -959,6 +1023,8 @@ async def search_documents(query: str = Form(...)):
     finally:
         conn.close()
 
+    results = rerank_results(query.strip(), results)
+
     return {
         "query": query,
         "results": results,
@@ -972,8 +1038,8 @@ async def search_documents(query: str = Form(...)):
 
 
 @app.post("/chat")
-async def chat_rag(query: str = Form(...), use_rag: str = Form("on")):
-    """RAG Q&A or free chat depending on use_rag toggle."""
+async def chat_rag(query: str = Form(...), use_rag: str = Form("on"), history: str = Form("[]")):
+    """RAG Q&A or free chat depending on use_rag toggle. history is a JSON list of prior {role, content} turns."""
     if not query.strip():
         return JSONResponse(status_code=400, content={"error": "Empty query."})
 
@@ -984,6 +1050,13 @@ async def chat_rag(query: str = Form(...), use_rag: str = Form("on")):
             status_code=503,
             content={"error": "LLM 서비스가 연결되지 않았습니다. serve_llm.py를 실행하세요."},
         )
+
+    try:
+        prior_turns = json.loads(history)
+        if not isinstance(prior_turns, list):
+            prior_turns = []
+    except Exception:
+        prior_turns = []
 
     rag_enabled = use_rag == "on"
     sources = []
@@ -999,6 +1072,8 @@ async def chat_rag(query: str = Form(...), use_rag: str = Form("on")):
         finally:
             conn.close()
 
+        results = rerank_results(query.strip(), results)
+
         if not results:
             return JSONResponse(
                 status_code=200,
@@ -1009,23 +1084,38 @@ async def chat_rag(query: str = Form(...), use_rag: str = Form("on")):
                 },
             )
 
-        messages = build_rag_prompt(query.strip(), results)
+        context_text = ""
+        for i, chunk in enumerate(results, 1):
+            source = chunk.get("filename", "알 수 없음")
+            page = chunk.get("page_number", "?")
+            context_text += f"[문서 {i}: {source}, p.{page}]\n{chunk['text']}\n\n"
+
+        system_msg = (
+            "당신은 AI 문서검색 시스템의 질의응답 도우미입니다.\n"
+            "아래 제공된 문서 내용을 기반으로 질문에 정확하게 답변하세요.\n"
+            "문서에 없는 내용은 '제공된 문서에서 해당 정보를 찾을 수 없습니다'라고 답하세요.\n"
+            "답변 시 출처 문서와 페이지를 언급하세요.\n"
+            "답변은 간결하고 완결된 문장으로 작성하세요. 중간에 끊기지 않도록 핵심만 요약하세요.\n"
+            "반드시 한국어로만 답변하세요. 한자(漢字), 일본어, 중국어를 섞지 마세요. "
+            "영어 단어가 필요한 경우에만 괄호 안에 짧게 표기하세요. "
+            "사용자가 영어로 질문하면 영어로 답변하세요."
+        )
+        messages = [{"role": "system", "content": system_msg}]
+        messages.extend(prior_turns)
+        messages.append({"role": "user", "content": f"참고 문서:\n{context_text}\n질문: {query.strip()}"})
         sources = [{"filename": r.get("filename", ""), "page_number": r.get("page_number", 0)} for r in results]
     else:
         # Free chat mode: direct LLM without RAG
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "당신은 친절하고 유능한 AI 도우미입니다. "
-                    "사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요. "
-                    "반드시 한국어로만 답변하세요. 한자(漢字), 일본어, 중국어를 섞지 마세요. "
-                    "영어 단어가 필요한 경우에만 괄호 안에 짧게 표기하세요. "
-                    "사용자가 영어로 질문하면 영어로 답변하세요."
-                ),
-            },
-            {"role": "user", "content": query.strip()},
-        ]
+        system_msg = (
+            "당신은 친절하고 유능한 AI 도우미입니다. "
+            "사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요. "
+            "반드시 한국어로만 답변하세요. 한자(漢字), 일본어, 중국어를 섞지 마세요. "
+            "영어 단어가 필요한 경우에만 괄호 안에 짧게 표기하세요. "
+            "사용자가 영어로 질문하면 영어로 답변하세요."
+        )
+        messages = [{"role": "system", "content": system_msg}]
+        messages.extend(prior_turns)
+        messages.append({"role": "user", "content": query.strip()})
 
     async def event_generator():
         try:

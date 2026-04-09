@@ -11,11 +11,11 @@
   },
   "llm": {
     "base_url": "http://localhost:8000/v1",
-    "model_path": "./models/SOLAR-10.7B-Instruct-v1.0-GGUF/solar-10.7b-instruct-v1.0.Q4_K_M.gguf",
+    "model_path": "./models/Yarn-Solar-10B-64K/Yarn-Solar-10b-64k.Q4_K_M.gguf",
     "max_tokens": 512,
     "temperature": 0.3,
     "n_gpu_layers": -1,
-    "n_ctx": 4096
+    "n_ctx": 65536
   },
   "embedding": {
     "model_name": "./models/bge-m3",
@@ -26,12 +26,18 @@
     "overlap": 100
   },
   "search": {
-    "max_results": 10,
+    "max_results": 20,
     "final_results": 5,
     "rrf_k": 60,
     "weights": {
       "semantic": 0.7,
       "bm25": 0.3
     }
+  },
+  "reranker": {
+    "model_name": "./models/bge-reranker-v2-m3-ko",
+    "device": "cpu",
+    "candidates": 40,
+    "final_results": 5
   }
 }
