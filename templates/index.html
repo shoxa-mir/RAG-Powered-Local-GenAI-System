@@ -371,7 +371,7 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
         sessionBefore.messages.push({ role: 'user', content: query });
         saveChatSessions(sessionsBefore);
     }
-    const historyToSend = (sessionBefore ? sessionBefore.messages : []).slice(0, -1).slice(-20);
+    const historyToSend = (sessionBefore ? sessionBefore.messages : []).slice(0, -1).slice(-6);
 
     try {
         const formData = new FormData();

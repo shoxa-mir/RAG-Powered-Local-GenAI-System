@@ -808,9 +808,9 @@ async def index_page(request: Request):
         await db.close()
 
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "documents": documents,
             "total_chunks": total_chunks,
             "config": CONFIG,
@@ -842,9 +842,9 @@ async def database_info_page(request: Request):
         await db.close()
 
     return templates.TemplateResponse(
+        request,
         "database_info.html",
         {
-            "request": request,
             "doc_count": doc_count,
             "indexed_count": indexed_count,
             "chunk_count": chunk_count,
@@ -895,9 +895,9 @@ async def health_check(request: Request, format: str = ""):
         return health_data
 
     return templates.TemplateResponse(
+        request,
         "health.html",
         {
-            "request": request,
             "health": health_data,
         },
     )
