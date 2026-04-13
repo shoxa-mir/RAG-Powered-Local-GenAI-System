@@ -71,6 +71,10 @@ def download_llm_model():
 
 
 if __name__ == "__main__":
+    import sys
+
+    auto_mode = "--auto" in sys.argv
+
     print("=" * 60)
     print("Downloading models for Local GenAI System Demo")
     print(f"Target directory: {MODELS_DIR}")
@@ -84,14 +88,22 @@ if __name__ == "__main__":
 
     print("\n--- 3/3: LLM Model (SOLAR-10.7B-Instruct-GGUF Q4_K_M) ---")
     print("NOTE: The GGUF model is ~6.6GB. Works on CPU or GPU.")
-    response = input("Download LLM model now? [y/N]: ").strip().lower()
-    if response == "y":
+
+    if auto_mode:
+        print("[AUTO] Auto-downloading LLM model...")
         try:
             download_llm_model()
         except ImportError:
             print("[SKIP] huggingface_hub not installed. Run: pip install huggingface-hub")
     else:
-        print("[SKIP] LLM model download skipped.")
+        response = input("Download LLM model now? [y/N]: ").strip().lower()
+        if response == "y":
+            try:
+                download_llm_model()
+            except ImportError:
+                print("[SKIP] huggingface_hub not installed. Run: pip install huggingface-hub")
+        else:
+            print("[SKIP] LLM model download skipped.")
 
     print("\n" + "=" * 60)
     print("Done! Update config.json to use local paths:")

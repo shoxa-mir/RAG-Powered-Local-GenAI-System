@@ -12,10 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set up Python symlink
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
-# Download Qdrant binary
-RUN curl -L https://github.com/qdrant/qdrant/releases/download/v1.7.0/qdrant-x86_64-unknown-linux-gnu -o /usr/local/bin/qdrant && \
-    chmod +x /usr/local/bin/qdrant
-
 # Register CUDA driver stub so linker finds libcuda.so
 RUN echo "/usr/local/cuda/lib64/stubs" > /etc/ld.so.conf.d/cuda-stubs.conf && ldconfig
 
@@ -40,11 +36,33 @@ COPY static/ static/
 RUN mkdir -p /etc/supervisor/conf.d
 COPY supervisord.conf /etc/supervisor/supervisord.conf
 
+# Create startup script
+RUN mkdir -p /app/scripts
+RUN cat > /app/scripts/startup.sh << 'EOFSCRIPT'
+#!/bin/bash
+set -e
+
+echo "[Startup] Checking/downloading models..."
+python download_models.py --auto
+
+echo "[Startup] Creating data directories..."
+mkdir -p /data/qdrant /data/documents /app/models
+
+echo "[Startup] Syncing models to persistent storage (if needed)..."
+if [ ! -d "/data/models" ]; then
+  cp -r ./models/* /data/models/ 2>/dev/null || echo "[Startup] Models already in /data"
+fi
+
+echo "[Startup] Starting supervisord..."
+exec supervisord -c /etc/supervisor/supervisord.conf
+EOFSCRIPT
+RUN chmod +x /app/scripts/startup.sh
+
 # Create data directory
 RUN mkdir -p /app/data
 
 # Expose ports
 EXPOSE 8001 8000 6333
 
-# Entrypoint: run supervisord
-ENTRYPOINT ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+# Entrypoint: startup script
+ENTRYPOINT ["/app/scripts/startup.sh"]
