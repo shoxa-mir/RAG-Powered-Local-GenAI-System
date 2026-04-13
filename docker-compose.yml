@@ -6,7 +6,7 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ./models:/app/models
+      - ./models:/data/models
       - ./static/documents:/app/static/documents
       - app-db:/app/data
     depends_on:

@@ -15,6 +15,10 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python
 # Register CUDA driver stub so linker finds libcuda.so
 RUN echo "/usr/local/cuda/lib64/stubs" > /etc/ld.so.conf.d/cuda-stubs.conf && ldconfig
 
+# Download Qdrant binary
+RUN curl -fsSL https://github.com/qdrant/qdrant/releases/download/v1.14.0/qdrant-x86_64-unknown-linux-gnu.tar.gz \
+    | tar -xz -C /tmp && mv /tmp/qdrant /usr/local/bin/qdrant && chmod +x /usr/local/bin/qdrant
+
 # Build llama-cpp-python with CUDA
 ENV CMAKE_ARGS="-DGGML_CUDA=on"
 ENV CUDACXX=/usr/local/cuda/bin/nvcc
@@ -42,16 +46,9 @@ RUN cat > /app/scripts/startup.sh << 'EOFSCRIPT'
 #!/bin/bash
 set -e
 
+mkdir -p /data/models /data/qdrant /data/documents
 echo "[Startup] Checking/downloading models..."
 python download_models.py --auto
-
-echo "[Startup] Creating data directories..."
-mkdir -p /data/qdrant /data/documents /app/models
-
-echo "[Startup] Syncing models to persistent storage (if needed)..."
-if [ ! -d "/data/models" ]; then
-  cp -r ./models/* /data/models/ 2>/dev/null || echo "[Startup] Models already in /data"
-fi
 
 echo "[Startup] Starting supervisord..."
 exec supervisord -c /etc/supervisor/supervisord.conf

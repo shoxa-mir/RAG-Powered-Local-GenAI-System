@@ -4,12 +4,16 @@ Run this once to make the system fully offline-capable.
 
 Usage:
     python download_models.py
+
+Environment:
+    MODELS_DIR: Override models directory (default: /data/models for HF Spaces, ./models for local with env var)
 """
 
+import os
 from pathlib import Path
 
-MODELS_DIR = Path(__file__).resolve().parent / "models"
-MODELS_DIR.mkdir(exist_ok=True)
+MODELS_DIR = Path(os.environ.get("MODELS_DIR", "/data/models"))
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def download_embedding_model():
@@ -47,13 +51,13 @@ def download_reranker_model():
 
 
 def download_llm_model():
-    """Download SOLAR-10.7B-Instruct GGUF (Q4_K_M) for llama-cpp-python."""
+    """Download Yarn-Solar-10b-64k GGUF (Q4_K_M) for llama-cpp-python."""
     from huggingface_hub import hf_hub_download
 
-    repo_id = "TheBloke/SOLAR-10.7B-Instruct-v1.0-GGUF"
-    filename = "solar-10.7b-instruct-v1.0.Q4_K_M.gguf"
-    save_dir = MODELS_DIR / "SOLAR-10.7B-Instruct-v1.0-GGUF"
-    save_dir.mkdir(exist_ok=True)
+    repo_id = "MaziyarPanahi/Yarn-Solar-10b-64k-GGUF"
+    filename = "Yarn-Solar-10b-64k.Q4_K_M.gguf"
+    save_dir = MODELS_DIR / "Yarn-Solar-10B-64K"
+    save_dir.mkdir(parents=True, exist_ok=True)
     target = save_dir / filename
 
     if target.exists():
@@ -61,7 +65,7 @@ def download_llm_model():
         return
 
     print(f"[...] Downloading LLM model: {repo_id}/{filename}")
-    print("      This is ~6.6GB (Q4_K_M quantized) ...")
+    print("      This is ~6.5GB (Q4_K_M quantized) ...")
     hf_hub_download(
         repo_id=repo_id,
         filename=filename,
@@ -86,8 +90,8 @@ if __name__ == "__main__":
     print("\n--- 2/3: Reranker Model (dragonkue/bge-reranker-v2-m3-ko) ---")
     download_reranker_model()
 
-    print("\n--- 3/3: LLM Model (SOLAR-10.7B-Instruct-GGUF Q4_K_M) ---")
-    print("NOTE: The GGUF model is ~6.6GB. Works on CPU or GPU.")
+    print("\n--- 3/3: LLM Model (Yarn-Solar-10b-64k-GGUF Q4_K_M) ---")
+    print("NOTE: The GGUF model is ~6.5GB. Requires GPU for 65K context window.")
 
     if auto_mode:
         print("[AUTO] Auto-downloading LLM model...")
@@ -106,8 +110,8 @@ if __name__ == "__main__":
             print("[SKIP] LLM model download skipped.")
 
     print("\n" + "=" * 60)
-    print("Done! Update config.json to use local paths:")
-    print('  "embedding": { "model_name": "./models/bge-m3" }')
-    print('  "reranker": { "model_name": "./models/bge-reranker-v2-m3-ko" }')
-    print('  "llm": { "model_path": "./models/SOLAR-10.7B-Instruct-v1.0-GGUF/solar-10.7b-instruct-v1.0.Q4_K_M.gguf" }')
+    print("Done! Use paths in config.json (auto-set to /data/models for HF Spaces, ./models for local):")
+    print('  "embedding": { "model_name": "/data/models/bge-m3" }')
+    print('  "reranker": { "model_name": "/data/models/bge-reranker-v2-m3-ko" }')
+    print('  "llm": { "model_path": "/data/models/Yarn-Solar-10B-64K/Yarn-Solar-10b-64k.Q4_K_M.gguf" }')
     print("=" * 60)

@@ -11,14 +11,14 @@
   },
   "llm": {
     "base_url": "http://localhost:8000/v1",
-    "model_path": "./models/Yarn-Solar-10B-64K/Yarn-Solar-10b-64k.Q4_K_M.gguf",
+    "model_path": "/data/models/Yarn-Solar-10B-64K/Yarn-Solar-10b-64k.Q4_K_M.gguf",
     "max_tokens": 512,
     "temperature": 0.3,
     "n_gpu_layers": -1,
     "n_ctx": 65536
   },
   "embedding": {
-    "model_name": "./models/bge-m3",
+    "model_name": "/data/models/bge-m3",
     "device": "cpu"
   },
   "chunking": {
@@ -35,7 +35,7 @@
     }
   },
   "reranker": {
-    "model_name": "./models/bge-reranker-v2-m3-ko",
+    "model_name": "/data/models/bge-reranker-v2-m3-ko",
     "device": "cuda",
     "candidates": 10,
     "final_results": 5
